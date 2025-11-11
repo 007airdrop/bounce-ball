@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no" />
+    <title>Nokia Bounce — Reimagined (2025)</title>
+
+    <!-- Farcade / Farcade-like SDK (your original reference) -->
+    <script src="https://cdn.jsdelivr.net/npm/@farcade/game-sdk@0.2.1/dist/index.min.js"></script>
+
+    <style>
+      :root { color-scheme: dark; }
+      html,body { height:100%; margin:0; font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; background:#001014; -webkit-tap-highlight-color:transparent; }
+      #game-wrap { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:linear-gradient(180deg,#001014,#001827); overflow:hidden; }
+      canvas { display:block; touch-action:none; image-rendering:optimizeQuality; }
+      .overlay {
+        position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none;
+      }
+      .panel {
+        pointer-events:auto;
+        min-width:260px;
+        max-width:92%;
+        background:rgba(8,12,14,0.75);
+        border:1px solid rgba(255,255,255,0.06);
+        backdrop-filter: blur(6px);
+        color:#fff;
+        padding:18px;
+        border-radius:14px;
+        box-shadow:0 8px 30px rgba(0,0,0,0.5);
+        text-align:center;
+      }
+      .title { font-size:20px; margin-bottom:6px; font-weight:700; letter-spacing:0.6px; }
+      .subtitle { font-size:13px; opacity:0.85; margin-bottom:12px; }
+      .controls-row { display:flex; gap:8px; justify-content:center; margin-top:12px; }
+      .btn { background:linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)); padding:10px 14px; border-radius:10px; border:1px solid rgba(255,255,255,0.08); color:#fff; font-weight:700; cursor:pointer;}
+      .small { font-size:12px; padding:8px 10px; }
+      .muted { opacity:0.7; }
+      .hud {
+        position:absolute; left:12px; top:10px; color:#fff; text-shadow:0 2px 6px rgba(0,0,0,0.6); pointer-events:none;
+        display:flex; gap:10px; align-items:center; font-weight:600;
+      }
+      .hud .score { font-size:18px; }
+      .hud .meta { font-size:12px; opacity:0.85; }
+      .bottom-controls { position:absolute; left:0; right:0; bottom:12px; display:flex; justify-content:center; gap:18px; pointer-events:none; }
+      .touch-btn { pointer-events:auto; width:64px; height:64px; border-radius:50%; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.06); color:#fff; font-weight:800; user-select:none; }
+      .leaderboard { text-align:left; max-height:300px; overflow:auto; margin-top:6px; font-size:13px; }
+      .leaderboard li { padding:6px 8px; border-bottom:1px dashed rgba(255,255,255,0.03); display:flex; justify-content:space-between; }
+      .medal { display:inline-block; margin-right:8px; width:16px; height:16px; border-radius:50%; background:gold; box-shadow:0 2px 6px rgba(0,0,0,0.4); vertical-align:middle; }
+      @media (max-width:420px){
+        .panel { padding:12px; border-radius:12px; }
+      }
+    </style>
+
+    <!-- Config + Assets (swap assets URLs) -->
+    <script id="game-config" type="application/json">
+    {
+      "colors": {
+        "background":"#001014",
+        "ground":"#052630",
+        "platform":"#0AA6B5",
+        "spike":"#E24D4D",
+        "ball":"#FFB300",
+        "hud":"#FFFFFF",
+        "ring":"#FFD862",
+        "accent":"#7CFF8A"
+      },
+      "player": {
+        "radius": 14,
+        "moveSpeed": 2.8,
+        "bounce": 0.86,
+        "airControl": 0.85,
+        "maxHSpeed": 5.2
+      },
+      "gameplay": {
+        "gravity": 0.36,
+        "friction": 0.025,
+        "levelScrollSpeed": 1.15,
+        "ringScore": 120,
+        "finishBonus": 400
+      },
+      "enemy": {
+        "spikeSize": 18
+      },
+      "ui": {
+        "showFPS": false,
+        "enableParticles": true
+      },
+      "leaderboard": {
+        "localMaxEntries": 10,
+        "submitToFarcadeIfAvailable": true
+      }
+    }
+    </script>
+
+    <script id="game-assets" type="application/json">
+    {
+      "sounds": {
+        "bounce": "",
+        "ring": "",
+        "hit": "",
+        "bg": ""
+      },
+      "_meta": {
+        "sounds.bounce": { "label":"Bounce SFX" },
+        "sounds.ring": { "label":"Ring Collect SFX" },
+        "sounds.hit": { "label":"Hit/Death SFX" },
+        "sounds.bg": { "label":"Background Music (loop)" }
+      }
+    }
+    </script>
+  </head>
+
+  <body>
+    <div id="game-wrap">
+      <canvas id="canvas"></canvas>
+
+      <!-- HUD -->
+      <div class="hud" aria-hidden="true">
+        <div class="score" id="hudScore">Score: 0</div>
+        <div class="meta" id="hudBest">Best: 0</div>
+      </div>
+
+      <!-- Overlay: start/pause/gameover -->
+      <div id="overlay" class="overlay">
+        <div id="panel" class="panel" style="display:none;">
+          <div class="title" id="panelTitle">Nokia Bounce</div>
+          <div class="subtitle" id="panelSub">Tap to bounce and steer the ball. Avoid spikes. Collect rings for bonus points.</div>
+          <div id="panelBody">
+            <button id="startBtn" class="btn">Tap to Start</button>
+            <div class="controls-row" style="margin-top:10px;">
+              <button id="muteBtn" class="btn small">Mute</button>
+              <button id="leaderBtn" class="btn small">Leaderboard</button>
+              <button id="settingsBtn" class="btn small">Settings</button>
+            </div>
+            <div id="leaderModal" style="display:none; margin-top:12px;">
+              <strong>Local Leaderboard</strong>
+              <ul id="leaderList" class="leaderboard"></ul>
+            </div>
+            <div id="settings" style="display:none; margin-top:10px; text-align:left;">
+              <label style="display:flex; justify-content:space-between; margin:6px 0;">
+                <span>Particles</span>
+                <input type="checkbox" id="optParticles" />
+              </label>
+              <label style="display:flex; justify-content:space-between; margin:6px 0;">
+                <span>Show FPS</span>
+                <input type="checkbox" id="optFPS" />
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- bottom touch controls -->
+      <div class="bottom-controls" id="bottomControls" aria-hidden="true">
+        <div id="btnLeft" class="touch-btn">◀</div>
+        <div id="btnRight" class="touch-btn">▶</div>
+      </div>
+    </div>
+
+    <script>
+    /**************************************************************************
+     * Modernized Bounce Game — Single-file
+     * - Responsive retina canvas
+     * - Smooth physics + particles
+     * - Start / Pause / GameOver flows
+     * - Local leaderboard + optional Farcade submit
+     * - Detailed comments — tweak CONFIG & ASSETS below
+     **************************************************************************/
+
+    // ---------- Globals & Helpers ----------
+    let canvas = null, ctx = null;
+    let DPR = Math.max(1, window.devicePixelRatio || 1);
+    let W = 400, H = 680; // logical default; canvas will scale to fit
+    let lastTime = 0, acc = 0;
+    const FIXED_DT = 1000 / 60;
+    let FPS = 0;
+
+    let CONFIG = {};
+    let ASSETS = {};
+    const SND = {};
+
+    let gameStarted = false, gameOver = false, isMuted = false, paused = false;
+    let gameScore = 0, levelIndex = 0;
+
+    // State
+    const state = {
+      camY: 0,
+      rings: [],
+      spikes: [],
+      platforms: [],
+      goal: { x: 200, y: -1200, r: 20 },
+      particles: []
+    };
+
+    const player = {
+      x: 200, y: 520, vx:0, vy:0, r: 14, onGround:false, alive:true
+    };
+
+    // Simple RNG
+    const rand = (a,b) => a + Math.random() * (b-a);
+
+    // ---------- Init Config & Assets ----------
+    function loadJSONConfigs() {
+      try { CONFIG = JSON.parse(document.getElementById('game-config').textContent); } catch(e){ CONFIG = {}; }
+      try { ASSETS = JSON.parse(document.getElementById('game-assets').textContent); } catch(e){ ASSETS = {}; }
+      if(!CONFIG.colors) CONFIG.colors = { background:'#001014', hud:'#fff' };
+      // Update UI from config
+      document.getElementById('optParticles').checked = !!CONFIG.ui.enableParticles;
+      document.getElementById('optFPS').checked = !!CONFIG.ui.showFPS;
+      document.body.style.background = CONFIG.colors.background || '#001014';
+    }
+
+    function initAssets() {
+      const s = ASSETS.sounds || {};
+      if(s.bounce) SND.bounce = new Audio(s.bounce);
+      if(s.ring) SND.ring = new Audio(s.ring);
+      if(s.hit) SND.hit = new Audio(s.hit);
+      if(s.bg) { SND.bg = new Audio(s.bg); SND.bg.loop = true; SND.bg.volume = 0.45; }
+    }
+
+    function playSound(aud, opts = {}) {
+      if(!aud || isMuted) return;
+      try {
+        aud.currentTime = 0;
+        aud.play();
+      } catch(e){}
+      if(navigator.vibrate && opts.vibrate) {
+        try { navigator.vibrate(20); } catch(e) {}
+      }
+    }
+
+    // ---------- Canvas & Resize ----------
+    function fitCanvas() {
+      const wrap = document.getElementById('game-wrap');
+      const maxW = wrap.clientWidth, maxH = wrap.clientHeight;
+      // preserve portrait 9:16-ish; adapt to height
+      const targetRatio = W / H;
+      let vw = maxW, vh = maxH;
+      const actualRatio = vw / vh;
+      let scale;
+      if(actualRatio > targetRatio) { // too wide
+        scale = vh / H;
+      } else {
+        scale = vw / W;
+      }
+      const cssW = Math.floor(W * scale), cssH = Math.floor(H * scale);
+      canvas.style.width = cssW + 'px';
+      canvas.style.height = cssH + 'px';
+      // real pixel size for crispness
+      canvas.width = Math.floor(cssW * DPR);
+      canvas.height = Math.floor(cssH * DPR);
+      ctx.setTransform(DPR,0,0,DPR,0,0); // logical drawing units match W,H scaled by DPR internally
+    }
+
+    window.addEventListener('resize', () => {
+      fitCanvas();
+    });
+
+    // ---------- Level generation ----------
+    function resetLevel(seed=0) {
+      const c = CONFIG;
+      state.rings = []; state.spikes = []; state.platforms = []; state.particles = [];
+      player.x = W/2; player.y = H - 80; player.vx = 0; player.vy = 0; player.alive = true;
+      player.r = c.player.radius || player.r;
+      state.camY = 0;
+      gameOver = false; gameStarted=false; gameScore=0;
+      // Generate platforms upward
+      let y = H - 80;
+      for(let i=0;i<18;i++){
+        const width = Math.max(100, 260 + Math.sin(i*0.7)*70 - i*2);
+        const px = 40 + (i%2?40:0) + Math.sin(i*0.4)*10;
+        state.platforms.push({ x:px, y:y, w:width, h:12 });
+        if(i%2===0) state.rings.push({ x:px + width*0.45, y: y - 42 - (i%3)*6, r:9, taken:false });
+        if(i%3===1){
+          const count = 2 + (i%4===1?1:0);
+          for(let s=0;s<count;s++){
+            const sx = px + ((s+1)*width)/(count+1);
+            state.spikes.push({ x:sx, y:y - 12, size: Math.round(c.enemy.spikeSize) });
+          }
+        }
+        y -= 120 - (i%4)*6;
+      }
+      state.goal = { x: W/2 + rand(-40,40), y: y - 140, r: 22 };
+      updateHUD();
+    }
+
+    // ---------- Collision ----------
+    function collideCircleRect(cx, cy, cr, rx, ry, rw, rh) {
+      const nx = Math.max(rx, Math.min(cx, rx + rw));
+      const ny = Math.max(ry, Math.min(cy, ry + rh));
+      const dx = cx - nx, dy = cy - ny;
+      return dx*dx + dy*dy <= cr*cr;
+    }
+
+    // ---------- Update & Physics ----------
+    const keys = { left:false, right:false };
+    const touches = { left:false, right:false };
+    function inputLeft() { return keys.left || touches.left; }
+    function inputRight() { return keys.right || touches.right; }
+
+    function update(dt) {
+      if(!CONFIG.player) return;
+      const c = CONFIG;
+      // Input
+      if(inputLeft()) player.vx -= c.player.moveSpeed * (player.onGround ? 1 : c.player.airControl);
+      if(inputRight()) player.vx += c.player.moveSpeed * (player.onGround ? 1 : c.player.airControl);
+      // clamp
+      player.vx = Math.max(-c.player.maxHSpeed, Math.min(c.player.maxHSpeed, player.vx));
+
+      // gravity
+      player.vy += c.gameplay.gravity;
+
+      // movement
+      player.x += player.vx;
+      player.y += player.vy;
+
+      // friction
+      player.vx *= 1 - c.gameplay.friction;
+
+      // bounds
+      if(player.x - player.r < 0){ player.x = player.r; player.vx *= -0.45; }
+      if(player.x + player.r > W){ player.x = W - player.r; player.vx *= -0.45; }
+
+      // platforms (top-only)
+      player.onGround = false;
+      for(const p of state.platforms){
+        if(player.y + player.r > p.y - 18 && player.y - player.r < p.y + p.h + 18){
+          if(player.vy > 0 && player.y + player.r >= p.y && player.y + player.r <= p.y + 14 && player.x >= p.x && player.x <= p.x + p.w){
+            player.y = p.y - player.r;
+            player.vy = -Math.abs(player.vy) * c.player.bounce;
+            player.onGround = true;
+            if(CONFIG.ui.enableParticles) spawnBounceParticles();
+            playSound(SND.bounce, {vibrate:true});
+          }
+        }
+      }
+
+      // spikes
+      for(const s of state.spikes){
+        const hit = collideCircleRect(player.x, player.y, player.r*0.85, s.x - s.size*0.5, s.y - s.size, s.size, s.size);
+        if(hit){
+          player.alive = false; gameOver = true;
+          playSound(SND.hit, {vibrate:true});
+          endGame(false);
+          return;
+        }
+      }
+
+      // rings
+      for(const r of state.rings){
+        if(!r.taken){
+          const dx = player.x - r.x, dy = player.y - r.y;
+          if(dx*dx + dy*dy <= (player.r + r.r)*(player.r + r.r)){
+            r.taken = true;
+            gameScore += CONFIG.gameplay.ringScore;
+            playSound(SND.ring);
+            if(CONFIG.ui.enableParticles) spawnRingParticles(r.x, r.y);
+            updateHUD();
+          }
+        }
+      }
+
+      // goal
+      const g = state.goal;
+      const dxg = player.x - g.x, dyg = player.y - g.y;
+      if(dxg*dxg + dyg*dyg <= (player.r + g.r)*(player.r + g.r)){
+        gameScore += CONFIG.gameplay.finishBonus;
+        endGame(true);
+        return;
+      }
+
+      // camera follows upwards, keep player near lower third for classic 'upwards' feel
+      state.camY = Math.min(0, -player.y + (H * 0.68));
+
+      // auto-scroll
+      player.y -= CONFIG.gameplay.levelScrollSpeed * (dt / FIXED_DT);
+
+      // particles update
+      const next = [];
+      for(const p of state.particles){
+        p.x += p.vx * (dt / FIXED_DT);
+        p.y += p.vy * (dt / FIXED_DT);
+        p.vy += 0.06 * (dt / FIXED_DT);
+        p.life -= dt;
+        if(p.life > 0) next.push(p);
+      }
+      state.particles = next;
+
+      // death by falling below visible area
+      if(player.y - player.r > H - state.camY + 60){
+        player.alive = false; gameOver = true;
+        playSound(SND.hit, {vibrate:true});
+        endGame(false);
+      }
+    }
+
+    // ---------- Particles ----------
+    function spawnBounceParticles(){
+      for(let i=0;i<8;i++){
+        state.particles.push({
+          x: player.x + rand(-4,4), y: player.y + player.r,
+          vx: rand(-1.8,1.8), vy: rand(-3.4,-0.6),
+          life: 280 + rand(-40,60),
+          col: CONFIG.colors.platform
+        });
+      }
+    }
+    function spawnRingParticles(x,y){
+      for(let i=0;i<12;i++){
+        state.particles.push({
+          x, y,
+          vx: Math.cos(i*0.52) * rand(0.6,2.2),
+          vy: Math.sin(i*0.52) * rand(-1.8,1.2),
+          life: 380 + rand(-40,80),
+          col: CONFIG.colors.ring
+        });
+      }
+    }
+
+    // ---------- Draw ----------
+    function draw() {
+      const c = CONFIG.colors;
+      // background
+      ctx.fillStyle = c.background;
+      ctx.fillRect(0,0,W,H);
+
+      // parallax stripes / ground bands
+      ctx.save();
+      ctx.translate(0, state.camY * 0.2 % 60);
+      for(let y=-80;y<H+80;y+=60){
+        ctx.fillStyle = shade(c.ground, (y/6)%20 - 6);
+        ctx.fillRect(0,y,W,28);
+      }
+      ctx.restore();
+
+      // platforms
+      ctx.fillStyle = c.platform;
+      for(const p of state.platforms){
+        drawRoundedRect(p.x, p.y + state.camY, p.w, p.h, 6);
+      }
+
+      // spikes
+      ctx.fillStyle = c.spike;
+      ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+      for(const s of state.spikes){
+        const x = s.x, y = s.y + state.camY, size = s.size;
+        ctx.beginPath();
+        ctx.moveTo(x - size*0.5, y);
+        ctx.lineTo(x, y - size);
+        ctx.lineTo(x + size*0.5, y);
+        ctx.closePath();
+        ctx.fill(); ctx.stroke();
+      }
+
+      // rings
+      for(const r of state.rings){
+        if(r.taken) continue;
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = c.ring;
+        ctx.beginPath();
+        ctx.arc(r.x, r.y + state.camY, r.r, 0, Math.PI*2);
+        ctx.stroke();
+      }
+
+      // Goal (glow + core)
+      const g = state.goal;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = CONFIG.colors.accent;
+      ctx.beginPath();
+      ctx.arc(g.x, g.y + state.camY, g.r + 6, 0, Math.PI*2);
+      ctx.stroke();
+      ctx.fillStyle = shade(CONFIG.colors.accent, -40);
+      ctx.beginPath();
+      ctx.arc(g.x, g.y + state.camY, g.r, 0, Math.PI*2);
+      ctx.fill();
+
+      // player ball with gradient highlight
+      ctx.save();
+      ctx.translate(player.x, player.y + state.camY);
+      const grd = ctx.createRadialGradient(-player.r*0.35, -player.r*0.35, player.r*0.14, 0, 0, player.r);
+      grd.addColorStop(0, '#ffffff');
+      grd.addColorStop(0.18, CONFIG.colors.ball);
+      grd.addColorStop(1, shade(CONFIG.colors.ball, -38));
+      ctx.fillStyle = grd;
+      ctx.beginPath(); ctx.arc(0,0, player.r, 0, Math.PI*2); ctx.fill();
+
+      // rim highlight
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+      ctx.stroke();
+
+      // shadow
+      ctx.globalAlpha = 0.16;
+      ctx.fillStyle = '#000';
+      ctx.beginPath();
+      ctx.ellipse(0, player.r + 2, player.r*0.95, player.r*0.4, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.restore();
+
+      // particles
+      for(const p of state.particles){
+        ctx.globalAlpha = Math.max(0, Math.min(1, p.life / 380));
+        ctx.fillStyle = p.col;
+        ctx.fillRect(p.x - 2, p.y + state.camY - 2, 4, 4);
+      }
+      ctx.globalAlpha = 1;
+      // HUD (score drawn by DOM; we can draw optional FPS)
+      if(CONFIG.ui.showFPS){
+        ctx.fillStyle = '#7FFFD4';
+        ctx.font = '12px Inter, Arial';
+        ctx.fillText('FPS: ' + Math.round(FPS), 12, 44);
+      }
+
+      // dim when overlay active
+      if(!gameStarted || gameOver || paused){
+        ctx.fillStyle = 'rgba(0,0,0,0.28)';
+        ctx.fillRect(0,0,W,H);
+      }
+    }
+
+    function drawRoundedRect(x,y,w,h,r){
+      ctx.beginPath();
+      ctx.moveTo(x+r, y);
+      ctx.lineTo(x+w-r, y);
+      ctx.quadraticCurveTo(x+w, y, x+w, y+r);
+      ctx.lineTo(x+w, y+h-r);
+      ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
+      ctx.lineTo(x+r, y+h);
+      ctx.quadraticCurveTo(x, y+h, x, y+h-r);
+      ctx.lineTo(x, y+r);
+      ctx.quadraticCurveTo(x, y, x+r, y);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // shade helper
+    function shade(hex, amt){
+      let c = hex.replace('#','');
+      if(c.length===3) c = c[0]+c[0]+c[1]+c[1]+c[2]+c[2];
+      const num = parseInt(c,16);
+      let r = Math.max(0, Math.min(255, (num>>16) + amt));
+      let g = Math.max(0, Math.min(255, ((num>>8)&0xff) + amt));
+      let b = Math.max(0, Math.min(255, (num & 0xff) + amt));
+      return '#' + r.toString(16).padStart(2,'0') + g.toString(16).padStart(2,'0') + b.toString(16).padStart(2,'0');
+    }
+
+    // ---------- Game Loop ----------
+    function loop(ts){
+      if(!lastTime) lastTime = ts;
+      const delta = ts - lastTime;
+      lastTime = ts;
+      FPS = 1000 / Math.max(1, delta);
+
+      acc += delta;
+      while(acc >= FIXED_DT){
+        if(gameStarted && !gameOver && !paused) update(FIXED_DT);
+        acc -= FIXED_DT;
+      }
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    // ---------- Input handling ----------
+    function setupInputs(){
+      // keyboard
+      window.addEventListener('keydown', (e) => {
+        if(e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.left = true;
+        if(e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = true;
+        if(e.key === 'r' || e.key === 'R') { resetGame(); startGame(); }
+        if(e.key === 'Escape') togglePause();
+      });
+      window.addEventListener('keyup', (e) => {
+        if(e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.left = false;
+        if(e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = false;
+      });
+
+      // touch zones
+      let ongoingTouches = {};
+      canvas.addEventListener('touchstart', (ev) => {
+        ev.preventDefault();
+        for(const t of ev.changedTouches){
+          ongoingTouches[t.identifier] = t;
+          if(t.clientX < window.innerWidth/2) touches.left = true; else touches.right = true;
+        }
+      }, {passive:false});
+      canvas.addEventListener('touchend', (ev) => {
+        ev.preventDefault();
+        for(const t of ev.changedTouches){
+          delete ongoingTouches[t.identifier];
+        }
+        touches.left = false; touches.right = false;
+      }, {passive:false});
+
+      // pointer buttons
+      const btnLeft = document.getElementById('btnLeft');
+      const btnRight = document.getElementById('btnRight');
+      // show for touch devices
+      if('ontouchstart' in window) document.getElementById('bottomControls').style.display = 'flex';
+      const press = (side, v) => { if(side==='L') touches.left = v; else touches.right = v; };
+      ['pointerdown','pointerup','pointerleave','pointercancel'].forEach(ev=>{
+        btnLeft.addEventListener(ev, (e)=> {
+          if(ev==='pointerdown') press('L', true); else press('L', false);
+          e.preventDefault();
+        });
+        btnRight.addEventListener(ev, (e)=> {
+          if(ev==='pointerdown') press('R', true); else press('R', false);
+          e.preventDefault();
+        });
+      });
+
+      // Start button
+      document.getElementById('startBtn').addEventListener('click', () => {
+        if(gameOver) {
+          resetGame();
+        }
+        startGame();
+      });
+
+      document.getElementById('muteBtn').addEventListener('click', toggleMute);
+      document.getElementById('leaderBtn').addEventListener('click', toggleLeaderboard);
+      document.getElementById('settingsBtn').addEventListener('click', toggleSettings);
+
+      document.getElementById('optParticles').addEventListener('change', (e) => {
+        CONFIG.ui.enableParticles = e.target.checked;
+      });
+      document.getElementById('optFPS').addEventListener('change', (e) => {
+        CONFIG.ui.showFPS = e.target.checked;
+      });
+    }
+
+    // ---------- HUD / Overlays ----------
+    function showPanel(titleText, subtitleText, showButtons=true){
+      const panel = document.getElementById('panel');
+      document.getElementById('panelTitle').textContent = titleText || 'Bounce';
+      document.getElementById('panelSub').textContent = subtitleText || '';
+      panel.style.display = 'block';
+      // show buttons etc
+      document.getElementById('leaderModal').style.display = 'none';
+      document.getElementById('settings').style.display = 'none';
+    }
+    function hidePanel(){
+      document.getElementById('panel').style.display = 'none';
+    }
+
+    function updateHUD(){
+      document.getElementById('hudScore').textContent = 'Score: ' + Math.max(0, gameScore);
+      const best = getLocalBest();
+      document.getElementById('hudBest').textContent = 'Best: ' + (best || 0);
+    }
+
+    // ---------- Game state control ----------
+    function startGame(){
+      gameStarted = true; gameOver = false; paused=false;
+      hidePanel();
+      if(SND.bg && !isMuted){
+        try{ SND.bg.play(); } catch(e){}
+      }
+      // tell Farcade ready if not already (safe)
+      try { window.FarcadeSDK?.singlePlayer?.actions?.ready?.(); } catch(e){}
+    }
+
+    function togglePause(){
+      paused = !paused;
+      if(paused) showPanel('Paused', 'Tap Resume to continue'); else hidePanel();
+    }
+
+    function toggleMute(){
+      isMuted = !isMuted;
+      document.getElementById('muteBtn').textContent = isMuted ? 'Unmute' : 'Mute';
+      if(SND.bg) {
+        if(isMuted) SND.bg.pause();
+        else try{ SND.bg.play(); } catch(e){}
+      }
+    }
+
+    function toggleLeaderboard(){
+      const el = document.getElementById('leaderModal');
+      if(el.style.display === 'block'){ el.style.display = 'none'; return; }
+      // populate leaderboard
+      const list = document.getElementById('leaderList');
+      list.innerHTML = '';
+      const arr = loadLocalLeaderboard();
+      if(arr.length === 0) {
+        list.innerHTML = '<li style="justify-content:center">No scores yet — play to set a record!</li>';
+      } else {
+        arr.forEach((e, i) => {
+          const li = document.createElement('li');
+          li.innerHTML = `<span>${i<3?'<span class="medal"></span>':''}${e.name||'You'}</span><span>${e.score}</span>`;
+          list.appendChild(li);
+        });
+      }
+      el.style.display = 'block';
+    }
+
+    function toggleSettings(){
+      const s = document.getElementById('settings');
+      s.style.display = s.style.display === 'block' ? 'none' : 'block';
+    }
+
+    function endGame(won){
+      gameStarted = false;
+      gameOver = true;
+      paused = false;
+      if(SND.bg) SND.bg.pause();
+      // show overlay after a short delay with score and options
+      setTimeout(()=> {
+        const title = won ? 'Level Complete!' : 'Game Over';
+        const sub = won ? `Nice! Score: ${gameScore}` : `You scored ${gameScore} — try again!`;
+        showPanel(title, sub);
+        document.getElementById('startBtn').textContent = 'Play Again';
+        // submit to leaderboard
+        saveScoreLocal(gameScore);
+        attemptFarcadeSubmit(gameScore);
+        updateHUD();
+      }, 280);
+      // notify Farcade of game over (safe)
+      try {
+        if(window.FarcadeSDK?.singlePlayer?.actions?.gameOver){
+          window.FarcadeSDK.singlePlayer.actions.gameOver({ score: gameScore });
+        }
+      } catch(e){}
+    }
+
+    function resetGame(){
+      resetLevel(levelIndex);
+      showPanel('Nokia Bounce', 'Tap to start — improved for 2025');
+      document.getElementById('startBtn').textContent = 'Tap to Start';
+      updateHUD();
+    }
+
+    // ---------- Leaderboard (localStorage) ----------
+    const LB_KEY = 'bounce_local_lb_v1';
+    function loadLocalLeaderboard(){ try { return JSON.parse(localStorage.getItem(LB_KEY) || '[]'); } catch(e) { return []; } }
+    function saveLocalLeaderboard(arr){ localStorage.setItem(LB_KEY, JSON.stringify(arr)); }
+
+    function saveScoreLocal(score){
+      const arr = loadLocalLeaderboard();
+      const entry = { score: Math.max(0, score), name: 'You', ts: Date.now() };
+      arr.push(entry);
+      arr.sort((a,b)=>b.score - a.score);
+      const N = CONFIG.leaderboard?.localMaxEntries || 10;
+      saveLocalLeaderboard(arr.slice(0, N));
+    }
+
+    function getLocalBest(){ const a = loadLocalLeaderboard()[0]; return a ? a.score : 0; }
+
+    // Try to submit to Farcade backend if available (best-effort — SDKs vary)
+    function attemptFarcadeSubmit(score){
+      if(!CONFIG.leaderboard?.submitToFarcadeIfAvailable) return;
+      try {
+        const actions = window.FarcadeSDK?.singlePlayer?.actions;
+        if(actions?.submitScore){
+          actions.submitScore({ score });
+        } else if(actions?.leaderboardSubmit){
+          actions.leaderboardSubmit({ score });
+        } else if(actions?.reportScore){
+          actions.reportScore({ score });
+        } else {
+          // no known method — skip
+        }
+      } catch(e){}
+    }
+
+    // ---------- Farcade SDK hooks (safe wrappers) ----------
+    function setupFarcade() {
+      try {
+        if(window.FarcadeSDK){
+          window.FarcadeSDK.on?.('play_again', () => {
+            resetGame(); startGame();
+          });
+          window.FarcadeSDK.on?.('toggle_mute', (data) => {
+            if(typeof data?.isMuted === 'boolean'){ isMuted = data.isMuted; if(SND.bg){ if(isMuted) SND.bg.pause(); else try{ SND.bg.play(); } catch(e){} } }
+          });
+        }
+      } catch(e){}
+    }
+
+    // ---------- Init ----------
+
+    function init(){
+      canvas = document.getElementById('canvas');
+      ctx = canvas.getContext('2d');
+      // logical resolution (will be scaled)
+      W = 400; H = 680;
+      loadJSONConfigs();
+      initAssets();
+
+      // initial canvas CSS size and pixel backing
+      fitCanvas();
+      window.addEventListener('resize', fitCanvas);
+
+      setupInputs();
+      setupFarcade();
+
+      // default UI state
+      document.getElementById('panel').style.display = 'block';
+      document.getElementById('panelTitle').textContent = 'Nokia Bounce (2025)';
+      document.getElementById('panelSub').textContent = 'Modern rework: smoother, nicer visuals, leaderboard & sounds.';
+
+      // Buttons text initial state
+      document.getElementById('muteBtn').textContent = isMuted ? 'Unmute' : 'Mute';
+
+      // set config options into live config when toggled
+      document.getElementById('optParticles').checked = !!CONFIG.ui.enableParticles;
+      document.getElementById('optFPS').checked = !!CONFIG.ui.showFPS;
+
+      // start with a fresh level
+      resetLevel();
+
+      // tell farcade we're ready in a safe way
+      try { window.FarcadeSDK?.singlePlayer?.actions?.ready?.(); } catch(e) {}
+      // start main loop
+      requestAnimationFrame(loop);
+    }
+
+    // ---------- Utilities ----------
+    window.addEventListener('load', init);
+
+    // expose helpers for debug
+    window._bounceGame = {
+      resetLevel, startGame, endGame, getState:() => ({CONFIG, ASSETS, state, player})
+    };
+
+    </script>
+  </body>
+</html>
